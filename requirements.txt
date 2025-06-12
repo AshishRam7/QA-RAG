@@ -1,0 +1,11 @@
+streamlit
+qdrant-client
+torch
+sentence-transformers
+python-dotenv
+st-copy-to-clipboard
+uuid
+requests
+moondream
+Pillow
+langchain
