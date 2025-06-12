@@ -56,10 +56,12 @@ Follow these steps to get the application running locally.
     Run the following command in your terminal(root directory) to install all the necceasry python libraries and packages needed
     ```bash
     pip install -r requirements.txt
+    
     ```
 
 **5. Run the streamlit Application**
     Run the application by running the command in the terminal:
     ```bash
     streamlit run app.py
+    
     ```
