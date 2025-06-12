@@ -28,7 +28,6 @@ Follow these steps to get the application running locally.
 
 **2. Create a file for the environment variables** 
     Create a file in the root directory with the name: '.env'.
-
     Go to the respective platforms(qdrant,datalab,moondream) to acquire the free api key's Define your api keys and urls with the following variable names:
 
     ```bash
@@ -54,14 +53,12 @@ Follow these steps to get the application running locally.
 
 **4. Install all neccesary packages**
     Run the following command in your terminal(root directory) to install all the necceasry python libraries and packages needed
-    ```bash
-    pip install -r requirements.txt
-    
-    ```
+```bash
+pip install -r requirements.txt
+```
 
 **5. Run the streamlit Application**
     Run the application by running the command in the terminal:
-    ```bash
-    streamlit run app.py
-    
-    ```
+```bash
+streamlit run app.py
+```
