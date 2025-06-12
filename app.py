@@ -1,9 +1,10 @@
 import streamlit as st
 import uuid
 from st_copy_to_clipboard import st_copy_to_clipboard
+import torch
+torch.classes.__path__ = []
 
-
-
+# Import the updated utility functions
 from utils import (
     load_embedding_model,
     load_moondream_model,
@@ -15,7 +16,7 @@ from utils import (
 
 # --- App Configuration ---
 st.set_page_config(
-    page_title="Question Context RAG Search",
+    page_title="Document RAG for Question Context Search",
     page_icon="✨",
     layout="wide"
 )
@@ -29,7 +30,7 @@ if 'search_results' not in st.session_state:
     st.session_state.search_results = None
 
 # --- Main App UI ---
-st.title("🔍 Question Context RAG Search")
+st.title("✨ Document RAG for Question Context Search")
 st.markdown(f"**Session ID:** `{st.session_state.session_id}` (Your uploads are isolated to this session)")
 
 # --- Load Models and Clients ---
@@ -57,11 +58,11 @@ with st.sidebar:
     st.header("2. Search Parameters")
     marks_for_question = st.number_input("Marks for the question:", min_value=1, max_value=50, value=5)
     default_k = marks_for_question * 2
-    k_snippets = st.number_input("Number of snippets to retrieve (k):", min_value=1, max_value=25, value=min(default_k, 25))
+    k_snippets = st.number_input("Number of snippets to retrieve (k):", min_value=1, max_value=40, value=min(default_k, 40))
     similarity_threshold = st.slider("Similarity Threshold:", min_value=0.0, max_value=1.0, value=0.5, step=0.05)
 
     st.header("3. Enter Your Question")
-    user_query = st.text_area("What is the question you want to retrieve context references for?", height=150)
+    user_query = st.text_area("What would you like to ask about your documents?", height=150)
 
     search_button = st.button("Search", type="primary")
 

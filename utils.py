@@ -1,9 +1,6 @@
-# utils.py
-
 import os
 import uuid
 import torch
-torch.classes.__path__ = []
 import streamlit as st
 from dotenv import load_dotenv
 import requests
@@ -33,8 +30,8 @@ DATALAB_MARKER_URL = os.getenv("DATALAB_MARKER_URL")
 DATALAB_API_KEY = os.getenv("DATALAB_API_KEY")
 MOONDREAM_API_KEY = os.getenv("MOONDREAM_API_KEY")
 
-EMBEDDING_MODEL_NAME = 'all-MiniLM-L6-v2'
-QDRANT_COLLECTION_NAME = "streamlit_rag_collection_marker"
+EMBEDDING_MODEL_NAME = 'BAAI/bge-base-en-v1.5'
+QDRANT_COLLECTION_NAME = "streamlit_rag_collection_marker_v2"
 DATALAB_POLL_INTERVAL = 5 # seconds
 DATALAB_MAX_POLLS = 120 # 10 minutes max
 
@@ -67,7 +64,7 @@ def get_qdrant_client():
         st.info(f"Qdrant collection '{QDRANT_COLLECTION_NAME}' not found. Creating it...")
         client.create_collection(
             collection_name=QDRANT_COLLECTION_NAME,
-            vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE)
+            vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
         )
     return client
 
@@ -105,22 +102,30 @@ def call_datalab_marker(file_bytes, filename):
     raise TimeoutError("Polling timed out for Datalab Marker processing.")
 
 def get_moondream_description(image_b64, md_model):
-    """Generates a description for a base64 encoded image using Moondream."""
+    """
+    FIXED: Generates a description for a base64 encoded image, correctly handling the dictionary response.
+    """
     try:
         image_bytes = base64.b64decode(image_b64)
         image = Image.open(io.BytesIO(image_bytes))
-        if image.mode != "RGB":
-            image = image.convert("RGB")
+        if image.mode != "RGB": image = image.convert("RGB")
         
         encoded_image = md_model.encode_image(image)
         prompt = "Describe the key information, data, or technical findings in this image. Focus on content relevant for analysis."
         
-        # CORRECTED Moondream call, as per the reference code. The method is .query()
-        # The .query() method returns a string directly.
-        description = md_model.query(encoded_image, prompt)
+        response = md_model.query(encoded_image, prompt)
+        
+        description = ""
+        # The API returns a dictionary. We need to extract the text from it.
+        if isinstance(response, dict):
+            description = response.get("answer", response.get("text", "Could not find text in Moondream response."))
+        elif isinstance(response, str):
+            description = response
+        else:
+            description = f"Unexpected response type from Moondream: {type(response)}"
+            
         return description.strip()
     except Exception as e:
-        # Provide a more specific error message if possible
         return f"Error in Moondream processing: {str(e)}"
 
 def enrich_markdown(markdown_text, image_descriptions):
@@ -135,10 +140,13 @@ def enrich_markdown(markdown_text, image_descriptions):
     return enriched_text
 
 def chunk_text_with_langchain(text):
+    """
+    FIXED: Increased chunk size to create more substantial, meaningful chunks.
+    """
     markdown_splitter = RecursiveCharacterTextSplitter(
-        separators=["\n\n", "\n", " ", ""],
-        chunk_size=1000,
-        chunk_overlap=150,
+        separators=["\n\n", "\n", ". ", " ", ""], # Added ". " as a separator
+        chunk_size=2000,   # Increased from 1000
+        chunk_overlap=200,    # Increased from 150
         length_function=len,
     )
     return markdown_splitter.split_text(text)
