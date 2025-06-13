@@ -30,7 +30,7 @@ if 'search_results' not in st.session_state:
     st.session_state.search_results = None
 
 # --- Main App UI ---
-st.title("✨ Document RAG for Question Context Search")
+st.title("Document RAG for Question Context Search")
 st.markdown(f"**Session ID:** `{st.session_state.session_id}` (Your uploads are isolated to this session)")
 
 # --- Load Models and Clients ---

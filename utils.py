@@ -133,7 +133,7 @@ def enrich_markdown(markdown_text, image_descriptions):
         alt_text = match.group(1)
         image_path = match.group(2)
         description = image_descriptions.get(image_path, "No description generated.")
-        return f"\n\n<div class='image-block'>\n  <h4>Image: {alt_text}</h4>\n  <p><b>AI-Generated Description:</b> {description}</p>\n</div>\n\n"
+        return f"{description}"
 
     image_pattern = re.compile(r"!\[(.*?)\]\((.*?)\)")
     enriched_text = image_pattern.sub(replace_func, markdown_text)
