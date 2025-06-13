@@ -17,7 +17,7 @@ from utils import (
 # --- App Configuration ---
 st.set_page_config(
     page_title="Document RAG for Question Context Search",
-    page_icon="✨",
+    page_icon="🥷",
     layout="wide"
 )
 
