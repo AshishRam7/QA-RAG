@@ -65,7 +65,9 @@ if app_mode == "RAG Search":
     try:
         embed_model = load_embedding_model()
         moondream_model = load_moondream_model()
-        qdrant_client = get_qdrant_client()
+        # Add this to create index before using it
+        qdrant_client, collection = get_qdrant_client(st.session_state.session_id)
+        
     except ValueError as e:
         st.error(f"RAG Tool Configuration Error: {e}. Please check your .env file for all required API keys.")
         st.stop()
