@@ -6,10 +6,6 @@ import zipfile
 from datetime import datetime
 from st_copy_to_clipboard import st_copy_to_clipboard
 import torch
-# This line is causing issues with torch 2.x and is not typically needed.
-# If you are on an older torch version and specifically need it, keep it.
-# Otherwise, it's safer to remove or comment out as it can lead to AttributeError.
-# torch.classes.__path__ = [] 
 
 # Import the updated utility functions
 from utils import (
@@ -64,13 +60,13 @@ if app_mode == "RAG Search":
     st.title("🧠 RAG for Question-Context Search")
     st.markdown(f"**Session ID:** `{st.session_state.session_id}` (Your uploads are isolated to this session)")
 
-    # --- Load RAG-specific Models and Clients ---
+    # --- Load RAG-specific Models ---
     try:
         embed_model = load_embedding_model()
-        moondream_model = load_moondream_model()
-        # FIX: Pass the session_id to get_qdrant_client
-        qdrant_client, collection = get_qdrant_client(st.session_state.session_id)
-        
+        # Moondream model and its limiter loaded once and cached
+        moondream_model, moondream_limiter = load_moondream_model()
+        # Qdrant client and collection name will be loaded/created on first file upload
+        qdrant_client, collection = None, None 
     except ValueError as e:
         st.error(f"RAG Tool Configuration Error: {e}. Please check your .env file for all required API keys.")
         st.stop()
@@ -98,10 +94,18 @@ if app_mode == "RAG Search":
         files_to_process = [f for f in uploaded_files if f.name not in st.session_state.processed_files]
         if files_to_process:
             st.toast(f"Found {len(files_to_process)} new document(s) to process.")
+            
+            # Lazily initialize Qdrant client and collection ONLY when a file is processed
+            try:
+                qdrant_client, collection = get_qdrant_client(st.session_state.session_id)
+            except ValueError as e:
+                st.error(f"Qdrant Client Initialization Error: {e}. Please ensure QDRANT_URL and QDRANT_API_KEY are set.")
+                st.stop()
+
             for file in files_to_process:
                 st.info(f"Processing '{file.name}'...")
-                # Ensure the collection name used for processing is the session-specific one
-                if process_and_embed_document(file, embed_model, moondream_model, qdrant_client, collection): # Pass the `collection` name
+                # Pass moondream_limiter to process_and_embed_document
+                if process_and_embed_document(file, embed_model, moondream_model, moondream_limiter, qdrant_client, collection): 
                     st.session_state.processed_files.append(file.name)
             st.success("All new files have been processed and indexed into the knowledge base.")
         
@@ -116,10 +120,18 @@ if app_mode == "RAG Search":
         elif not user_query:
             st.warning("Please enter a question to search.")
         else:
+            # Ensure qdrant_client and collection are available for search
+            # They should be if st.session_state.processed_files is not empty
+            if qdrant_client is None or collection is None:
+                try:
+                    qdrant_client, collection = get_qdrant_client(st.session_state.session_id)
+                except ValueError as e:
+                    st.error(f"Qdrant Client Error during search: {e}. Please check your .env file.")
+                    st.stop()
+
             with st.spinner("Searching across all indexed documents..."):
-                # Ensure the collection name used for searching is the session-specific one
                 st.session_state.search_results = search_qdrant(
-                    user_query, embed_model, qdrant_client, collection, k_snippets, similarity_threshold # Pass the `collection` name
+                    user_query, embed_model, qdrant_client, collection, k_snippets, similarity_threshold
                 )
 
     # --- RAG Display Results ---
@@ -148,6 +160,13 @@ elif app_mode == "Document Extraction Pipeline":
     st.title("Document Extraction Pipeline")
     st.markdown("Upload one or more PDFs to extract content as clean Markdown files and download all their images. This uses the Marker API for high-quality conversion.")
 
+    # Load Moondream model and limiter for this section too
+    try:
+        moondream_model, moondream_limiter = load_moondream_model()
+    except ValueError as e:
+        st.error(f"Moondream Model Configuration Error: {e}. Please check your .env file for MOONDREAM_API_KEY.")
+        st.stop()
+
     with st.sidebar:
         st.header("1. Upload Documents")
         uploaded_files = st.file_uploader(
@@ -167,7 +186,8 @@ elif app_mode == "Document Extraction Pipeline":
                 try:
                     st.toast(f"Extracting content from '{uploaded_file.name}'...")
                     file_bytes = uploaded_file.getvalue()
-                    final_md, images_to_save = prepare_document_for_download(file_bytes, uploaded_file.name)
+                    # Pass moondream_model and moondream_limiter
+                    final_md, images_to_save = prepare_document_for_download(file_bytes, uploaded_file.name, moondream_model, moondream_limiter)
                     basename = os.path.splitext(uploaded_file.name)[0]
                     
                     all_results.append({

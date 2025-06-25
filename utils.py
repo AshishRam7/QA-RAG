@@ -9,6 +9,7 @@ import base64
 import re
 from PIL import Image
 import io
+from collections import deque # Added for rate limiting
 
 # Text Processing & Embeddings
 from sentence_transformers import SentenceTransformer
@@ -27,7 +28,7 @@ load_dotenv()
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 DATALAB_MARKER_URL = os.getenv("DATALAB_MARKER_URL")
-DATALAB_API_KEY = os.getenv("DATALAB_API_KEY")
+#DATALAB_API_KEY = os.getenv("DATALAB_API_KEY")
 MOONDREAM_API_KEY = os.getenv("MOONDREAM_API_KEY")
 
 EMBEDDING_MODEL_NAME = 'BAAI/bge-base-en-v1.5'
@@ -35,6 +36,36 @@ EMBEDDING_MODEL_NAME = 'BAAI/bge-base-en-v1.5'
 QDRANT_COLLECTION_PREFIX = "streamlit_rag_collection_marker_v2" 
 DATALAB_POLL_INTERVAL = 5
 DATALAB_MAX_POLLS = 120
+
+# --- Moondream Rate Limiter ---
+class MoondreamRateLimiter:
+    """
+    Limits calls to Moondream API to a specified rate (e.g., 60 calls per minute).
+    Uses a deque to track call timestamps and sleeps if the rate limit is approached.
+    """
+    def __init__(self, calls_per_minute=55): # Set slightly below 60 for safety
+        self.calls_per_minute = calls_per_minute
+        self.last_calls = deque() # Stores timestamps of last calls
+
+    def wait_if_needed(self):
+        now = time.time()
+        
+        # Remove calls older than 60 seconds
+        while self.last_calls and self.last_calls[0] <= now - 60:
+            self.last_calls.popleft()
+
+        # If we've made too many calls recently, wait
+        if len(self.last_calls) >= self.calls_per_minute:
+            # Calculate when the earliest call in the current window will expire
+            wait_until = self.last_calls[0] + 60
+            sleep_time = wait_until - now
+            if sleep_time > 0:
+                # print(f"Rate limit hit. Sleeping for {sleep_time:.2f} seconds.") # For debugging
+                time.sleep(sleep_time + 0.1) # Add a small buffer
+                self.wait_if_needed() # Re-check after sleeping (recursive call to ensure limit is met)
+
+        self.last_calls.append(time.time()) # Record this call
+
 
 @st.cache_resource
 def load_embedding_model():
@@ -46,12 +77,13 @@ def load_embedding_model():
 
 @st.cache_resource
 def load_moondream_model():
-    # Required only for RAG Search tool
+    # Required for both RAG Search and Document Extraction tools
     if not MOONDREAM_API_KEY:
-        raise ValueError("MOONDREAM_API_KEY must be set in the .env file to use the RAG tool.")
+        raise ValueError("MOONDREAM_API_KEY must be set in the .env file to use features requiring Moondream.")
     st.info("Initializing Moondream model...")
     model = moondream.vl(api_key=MOONDREAM_API_KEY)
-    return model
+    limiter = MoondreamRateLimiter() # Instantiate the rate limiter
+    return model, limiter # Return both the model and the limiter
 
 @st.cache_resource
 def get_qdrant_client(session_id):
@@ -76,7 +108,6 @@ def get_qdrant_client(session_id):
             vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
         )
     return client, collection_name
-
 
 
 # --- API Call and Processing Functions ---
@@ -111,9 +142,10 @@ def call_datalab_marker(file_bytes, filename):
             st.warning(f"Polling Datalab failed: {e}. Retrying...")
     raise TimeoutError("Polling timed out for Datalab Marker processing.")
 
-def get_moondream_description(image_b64, md_model):
-    """Generates a description for a base64 encoded image."""
+def get_moondream_description(image_b64, md_model, limiter):
+    """Generates a description for a base64 encoded image, respecting rate limits."""
     try:
+        limiter.wait_if_needed() # Wait before making the API call
         image_bytes = base64.b64decode(image_b64)
         image = Image.open(io.BytesIO(image_bytes))
         if image.mode != "RGB": image = image.convert("RGB")
@@ -140,10 +172,11 @@ def get_moondream_description(image_b64, md_model):
         return f"Error in Moondream processing: {str(e)}"
 
 def enrich_markdown_for_rag(markdown_text, image_descriptions):
-    """Replaces image links with their AI-generated descriptions for RAG context."""
+    """Replaces image links with their AI-generated descriptions for RAG context or output."""
     def replace_func(match):
         image_path = match.group(2)
         description = image_descriptions.get(image_path, "No description generated.")
+        # Ensure the description is wrapped to clearly distinguish it
         return f"\n\n--- Image Description ---\n{description}\n--- End Image Description ---\n\n"
 
     image_pattern = re.compile(r"!\[(.*?)\]\((.*?)\)")
@@ -162,8 +195,7 @@ def chunk_text_with_langchain(text):
 
 # --- RAG Pipeline Function ---
 
-# Modified process_and_embed_document to accept collection_name instead of session_id directly
-def process_and_embed_document(uploaded_file, embed_model, md_model, qdrant_client, collection_name):
+def process_and_embed_document(uploaded_file, embed_model, md_model, md_limiter, qdrant_client, collection_name):
     filename = uploaded_file.name
     file_bytes = uploaded_file.getvalue()
     
@@ -182,7 +214,8 @@ def process_and_embed_document(uploaded_file, embed_model, md_model, qdrant_clie
         if images_b64:
             progress_bar = st.progress(0, text=f"Describing images in {filename}...")
             for i, (img_path, img_b64) in enumerate(images_b64.items()):
-                desc = get_moondream_description(img_b64, md_model)
+                # Pass the limiter to get_moondream_description
+                desc = get_moondream_description(img_b64, md_model, md_limiter)
                 image_descriptions[img_path] = desc
                 progress_bar.progress((i + 1) / len(images_b64), text=f"Describing image {i+1}/{len(images_b64)} in {filename}")
             progress_bar.empty()
@@ -222,49 +255,48 @@ def process_and_embed_document(uploaded_file, embed_model, md_model, qdrant_clie
 
 # --- Document Extraction Pipeline Function ---
 
-def prepare_document_for_download(file_bytes, filename):
+def prepare_document_for_download(file_bytes, filename, md_model, md_limiter):
     """
-    Processes a PDF file to extract markdown and images. This version does NOT
-    generate AI captions and is used for the Document Extraction Pipeline.
+    Processes a PDF file to extract markdown and images, including Moondream descriptions
+    in the markdown output, and prepares images for download.
     """
     # 1. Call Marker API to get raw markdown and base64 encoded images
     marker_result = call_datalab_marker(file_bytes, filename)
     raw_md = marker_result.get("markdown", "")
     images_b64 = marker_result.get("images", {})
 
-    # 2. Prepare final markdown and image files for download
+    # 2. Generate Moondream descriptions for images
+    image_descriptions = {}
+    if images_b64:
+        st.write(f"Generating descriptions for {len(images_b64)} images...")
+        image_progress_bar = st.progress(0, text=f"Describing images in {filename}...")
+        for i, (img_path, img_b64) in enumerate(images_b64.items()):
+            desc = get_moondream_description(img_b64, md_model, md_limiter)
+            image_descriptions[img_path] = desc
+            image_progress_bar.progress((i + 1) / len(images_b64), text=f"Describing image {i+1}/{len(images_b64)} in {filename}")
+        image_progress_bar.empty()
+        st.success(f"Moondream descriptions generated for '{filename}'.")
+    else:
+        st.info(f"No images found to describe in '{filename}'.")
+
+
+    # 3. Enrich markdown with image descriptions
+    md_with_descriptions = enrich_markdown_for_rag(raw_md, image_descriptions)
+
+    # 4. Prepare original image files for download (renaming paths for local structure)
     images_to_save = {}
-    path_mapping = {}
     
-    # Create new filenames and decode image data
     for i, (marker_path, img_b64_data) in enumerate(images_b64.items()):
-        # Use original extension if available, otherwise default to .png
         extension = os.path.splitext(marker_path)[1] or '.png'
         new_filename = f"image_{i}{extension}"
-        path_mapping[marker_path] = new_filename
         # Store decoded image bytes for zipping
         images_to_save[new_filename] = base64.b64decode(img_b64_data)
 
-    def replace_image_paths_for_download(match):
-        marker_path = match.group(2) # The original path from marker
-        
-        if marker_path in path_mapping:
-            alt_text = match.group(1)
-            new_path = path_mapping[marker_path]
-            # Format for local viewing: ![alt text](images/new_filename.png)
-            return f"![{alt_text}](images/{new_path})"
-        return match.group(0) # Return original if no match found
-
-    # Use regex to find and replace all image links
-    image_pattern = re.compile(r"!\[(.*?)\]\((.*?)\)")
-    final_md = image_pattern.sub(replace_image_paths_for_download, raw_md)
-
-    return final_md, images_to_save
+    return md_with_descriptions, images_to_save
 
 
 # --- Search and Formatting Functions ---
 
-# Modified search_qdrant to accept collection_name instead of session_id directly
 def search_qdrant(query, model, qdrant_client, collection_name, k, similarity_threshold):
     if not query:
         return []
@@ -272,7 +304,6 @@ def search_qdrant(query, model, qdrant_client, collection_name, k, similarity_th
     query_embedding = model.encode(query).tolist()
     
     # 2. Pull back top‑k from Qdrant with filter for the current session's collection
-    # The session_id is now implicitly handled by using the correct collection_name
     raw_results = qdrant_client.search(
         collection_name=collection_name, # Use the session-specific collection
         query_vector=query_embedding,
