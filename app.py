@@ -65,11 +65,11 @@ if app_mode == "RAG Search":
     try:
         embed_model = load_embedding_model()
         moondream_model, moondream_limiter = load_moondream_model()
-        marker_converter = load_marker_model()
+        marker_converter = load_marker_model() # This now handles internal config for LLM features
         qdrant_client, collection = None, None 
         
     except ValueError as e:
-        st.error(f"RAG Tool Configuration Error: {e}. Please check your .env file for all required API keys.")
+        st.error(f"RAG Tool Configuration Error: {e}. Please check your .env file for all required API keys and URLs.")
         st.stop()
 
     # --- Sidebar Inputs for RAG ---
@@ -166,7 +166,7 @@ elif app_mode == "Document Extraction Pipeline":
         moondream_model, moondream_limiter = load_moondream_model()
         marker_converter = load_marker_model()
     except ValueError as e:
-        st.error(f"Model Configuration Error: {e}. Please check your .env file for MOONDREAM_API_KEY.")
+        st.error(f"Model Configuration Error: {e}. Please check your .env file for required API keys.")
         st.stop()
 
     with st.sidebar:

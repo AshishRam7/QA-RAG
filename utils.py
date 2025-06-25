@@ -25,6 +25,7 @@ import moondream
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.output import text_from_rendered
+from marker.config.parser import ConfigParser # NEW IMPORT
 
 # --- Load Environment Variables and Constants ---
 load_dotenv()
@@ -32,6 +33,7 @@ load_dotenv()
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 MOONDREAM_API_KEY = os.getenv("MOONDREAM_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # NEW ENV VAR for Marker's LLM features
 
 EMBEDDING_MODEL_NAME = 'BAAI/bge-base-en-v1.5'
 # Base collection name prefix; a session ID will be appended to it
@@ -87,21 +89,52 @@ def load_moondream_model():
     return model, limiter # Return both the model and the limiter
 
 @st.cache_resource
-
 def load_marker_model():
-    """Load the local Marker model for PDF conversion"""
-    st.info("Initializing local Marker model...")
+    """Load the local Marker model for PDF conversion with advanced settings."""
+    st.info("Initializing local Marker model with LLM-enhanced features...")
     try:
-        # Create the model dictionary with all required models
+        # Define the configuration for Marker based on the user's guide
+        config_params = {
+            "use_llm": True,  # Enable LLM for higher quality processing
+            "format_lines": True,  # Format lines using OCR model (for better math, underlines, bold, etc.)
+            "redo_inline_math": True,  # For highest quality inline math conversion (works with use_llm)
+            "output_format": "markdown"
+        }
+
+        # Conditionally set LLM service based on availability of GEMINI_API_KEY
+        if config_params["use_llm"]:
+            if not GEMINI_API_KEY:
+                st.warning("GEMINI_API_KEY is not set. Marker's LLM features (use_llm, redo_inline_math) will be disabled.")
+                config_params["use_llm"] = False
+                config_params["redo_inline_math"] = False # This depends on use_llm
+                config_params["output_format"] = "markdown"
+            else:
+                # Default LLM service to Google Gemini as per Marker's documentation
+                config_params["gemini_api_key"] = GEMINI_API_KEY
+                config_params["llm_service"] = "marker.services.gemini.GoogleGeminiService"
+                config_params["output_format"] = "markdown"
+                # Marker's GoogleGeminiService is designed to pick up GEMINI_API_KEY or GOOGLE_API_KEY from environment variables.
+        
+        config_parser = ConfigParser(config_params)
         artifact_dict = create_model_dict()
         
-        # Create the PDF converter
         converter = PdfConverter(
+            config=config_parser.generate_config_dict(),
             artifact_dict=artifact_dict,
+            processor_list=config_parser.get_processors(),
+            renderer=config_parser.get_renderer(),
+            llm_service=config_parser.get_llm_service() # This will be None if use_llm is False or service not configured
         )
-        st.info("Marker model loaded successfully!")
+        st.info("Marker model loaded successfully with specified configurations!")
+        
+        if config_params["use_llm"] and "llm_service" in config_params:
+             st.info(f"Marker LLM features are ENABLED using {config_params['llm_service'].split('.')[-1]}.")
+        else:
+            st.info("Marker LLM features are DISABLED (either use_llm is False or GEMINI_API_KEY is missing).")
+
         return converter
     except Exception as e:
+        st.error(f"Failed to load Marker model: {e}")
         raise ValueError(f"Failed to load Marker model: {e}")
 
 @st.cache_resource
