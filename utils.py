@@ -87,6 +87,7 @@ def load_moondream_model():
     return model, limiter # Return both the model and the limiter
 
 @st.cache_resource
+
 def load_marker_model():
     """Load the local Marker model for PDF conversion"""
     st.info("Initializing local Marker model...")
@@ -272,6 +273,7 @@ def process_and_embed_document(uploaded_file, embed_model, md_model, md_limiter,
                 batch = points_to_upsert[i:i+batch_size]
                 # Use the provided collection_name
                 qdrant_client.upsert(collection_name=collection_name, points=batch, wait=True)
+
             st.success(f"Successfully indexed '{filename}' with {len(points_to_upsert)} enriched snippets.")
             return True
         except Exception as e:
@@ -321,13 +323,14 @@ def prepare_document_for_download(file_bytes, filename, md_model, md_limiter, ma
 
 # --- Search and Formatting Functions ---
 
+
 def search_qdrant(query, model, qdrant_client, collection_name, k, similarity_threshold):
+
     if not query:
         return []
     # 1. Encode query
     query_embedding = model.encode(query).tolist()
     
-    # 2. Pull back top‑k from Qdrant with filter for the current session's collection
     raw_results = qdrant_client.search(
         collection_name=collection_name, # Use the session-specific collection
         query_vector=query_embedding,
@@ -338,6 +341,7 @@ def search_qdrant(query, model, qdrant_client, collection_name, k, similarity_th
     # Since the collection is session-specific, all results from this collection
     # are relevant to the current session. No further filtering by 'session_id' payload is needed.
     return raw_results
+
 
 
 def create_passage_from_snippets(search_results):

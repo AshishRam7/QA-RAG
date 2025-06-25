@@ -64,12 +64,10 @@ if app_mode == "RAG Search":
     # --- Load RAG-specific Models ---
     try:
         embed_model = load_embedding_model()
-        # Moondream model and its limiter loaded once and cached
         moondream_model, moondream_limiter = load_moondream_model()
-        # Marker model loaded once and cached
         marker_converter = load_marker_model()
-        # Qdrant client and collection name will be loaded/created on first file upload
         qdrant_client, collection = None, None 
+        
     except ValueError as e:
         st.error(f"RAG Tool Configuration Error: {e}. Please check your .env file for all required API keys.")
         st.stop()
