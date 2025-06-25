@@ -8,7 +8,8 @@ import base64
 import re
 from PIL import Image
 import io
-from collections import deque # Added for rate limiting
+from collections import deque
+from typing import Optional
 
 # Text Processing & Embeddings
 from sentence_transformers import SentenceTransformer
@@ -25,7 +26,7 @@ import moondream
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.output import text_from_rendered
-from marker.config.parser import ConfigParser # NEW IMPORT
+from marker.config.parser import ConfigParser
 
 # --- Load Environment Variables and Constants ---
 load_dotenv()
@@ -33,46 +34,32 @@ load_dotenv()
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 MOONDREAM_API_KEY = os.getenv("MOONDREAM_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # NEW ENV VAR for Marker's LLM features
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 EMBEDDING_MODEL_NAME = 'BAAI/bge-base-en-v1.5'
-# Base collection name prefix; a session ID will be appended to it
-QDRANT_COLLECTION_PREFIX = "streamlit_rag_collection_marker_v2" 
+QDRANT_COLLECTION_PREFIX = "streamlit_rag_collection_marker_v2"
 
 # --- Moondream Rate Limiter ---
 class MoondreamRateLimiter:
-    """
-    Limits calls to Moondream API to a specified rate (e.g., 60 calls per minute).
-    Uses a deque to track call timestamps and sleeps if the rate limit is approached.
-    """
-    def __init__(self, calls_per_minute=55): # Set slightly below 60 for safety
+    def __init__(self, calls_per_minute=55):
         self.calls_per_minute = calls_per_minute
-        self.last_calls = deque() # Stores timestamps of last calls
+        self.last_calls = deque()
 
     def wait_if_needed(self):
         import time
         now = time.time()
-        
-        # Remove calls older than 60 seconds
         while self.last_calls and self.last_calls[0] <= now - 60:
             self.last_calls.popleft()
-
-        # If we've made too many calls recently, wait
         if len(self.last_calls) >= self.calls_per_minute:
-            # Calculate when the earliest call in the current window will expire
             wait_until = self.last_calls[0] + 60
             sleep_time = wait_until - now
             if sleep_time > 0:
-                # print(f"Rate limit hit. Sleeping for {sleep_time:.2f} seconds.") # For debugging
-                time.sleep(sleep_time + 0.1) # Add a small buffer
-                self.wait_if_needed() # Re-check after sleeping (recursive call to ensure limit is met)
-
-        self.last_calls.append(time.time()) # Record this call
-
+                time.sleep(sleep_time + 0.1)
+                self.wait_if_needed()
+        self.last_calls.append(time.time())
 
 @st.cache_resource
 def load_embedding_model():
-    # Required only for RAG Search tool
     device = "cuda" if torch.cuda.is_available() else "cpu"
     st.info(f"Embedding model is running on: {device}")
     model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
@@ -80,40 +67,41 @@ def load_embedding_model():
 
 @st.cache_resource
 def load_moondream_model():
-    # Required for both RAG Search and Document Extraction tools
     if not MOONDREAM_API_KEY:
         raise ValueError("MOONDREAM_API_KEY must be set in the .env file to use features requiring Moondream.")
     st.info("Initializing Moondream model...")
     model = moondream.vl(api_key=MOONDREAM_API_KEY)
-    limiter = MoondreamRateLimiter() # Instantiate the rate limiter
-    return model, limiter # Return both the model and the limiter
+    limiter = MoondreamRateLimiter()
+    return model, limiter
 
 @st.cache_resource
-def load_marker_model():
-    """Load the local Marker model for PDF conversion with advanced settings."""
-    st.info("Initializing local Marker model with LLM-enhanced features...")
+def load_marker_model(page_range_str: Optional[str] = None):
+    """
+    Load the local Marker model, configured with an optional page range.
+    The page_range_str is used as part of the cache key.
+    """
+    st.info("Initializing local Marker model...")
     try:
-        # Define the configuration for Marker based on the user's guide
         config_params = {
-            "use_llm": True,  # Enable LLM for higher quality processing
-            "format_lines": True,  # Format lines using OCR model (for better math, underlines, bold, etc.)
-            "redo_inline_math": True,  # For highest quality inline math conversion (works with use_llm)
+            "use_llm": True,
+            "format_lines": True,
+            "redo_inline_math": True,
             "output_format": "markdown"
         }
 
-        # Conditionally set LLM service based on availability of GEMINI_API_KEY
+        # NEW: Add page_range to config if provided
+        if page_range_str and page_range_str.strip():
+            config_params["page_range"] = page_range_str.strip()
+            st.info(f"Marker will process page range: '{config_params['page_range']}'")
+
         if config_params["use_llm"]:
             if not GEMINI_API_KEY:
-                st.warning("GEMINI_API_KEY is not set. Marker's LLM features (use_llm, redo_inline_math) will be disabled.")
+                st.warning("GEMINI_API_KEY not set. Marker's LLM features (use_llm, redo_inline_math) will be disabled.")
                 config_params["use_llm"] = False
-                config_params["redo_inline_math"] = False # This depends on use_llm
-                config_params["output_format"] = "markdown"
+                config_params["redo_inline_math"] = False
             else:
-                # Default LLM service to Google Gemini as per Marker's documentation
                 config_params["gemini_api_key"] = GEMINI_API_KEY
                 config_params["llm_service"] = "marker.services.gemini.GoogleGeminiService"
-                config_params["output_format"] = "markdown"
-                # Marker's GoogleGeminiService is designed to pick up GEMINI_API_KEY or GOOGLE_API_KEY from environment variables.
         
         config_parser = ConfigParser(config_params)
         artifact_dict = create_model_dict()
@@ -123,37 +111,32 @@ def load_marker_model():
             artifact_dict=artifact_dict,
             processor_list=config_parser.get_processors(),
             renderer=config_parser.get_renderer(),
-            llm_service=config_parser.get_llm_service() # This will be None if use_llm is False or service not configured
+            llm_service=config_parser.get_llm_service()
         )
-        st.info("Marker model loaded successfully with specified configurations!")
+        st.info("Marker model loaded successfully!")
         
-        if config_params["use_llm"] and "llm_service" in config_params:
+        if config_params.get("use_llm") and "llm_service" in config_params:
              st.info(f"Marker LLM features are ENABLED using {config_params['llm_service'].split('.')[-1]}.")
         else:
-            st.info("Marker LLM features are DISABLED (either use_llm is False or GEMINI_API_KEY is missing).")
+            st.info("Marker LLM features are DISABLED.")
 
         return converter
     except Exception as e:
         st.error(f"Failed to load Marker model: {e}")
-        raise ValueError(f"Failed to load Marker model: {e}")
+        raise
 
 @st.cache_resource
 def get_qdrant_client(session_id):
     if not QDRANT_URL or not QDRANT_API_KEY:
-        raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set in the .env file to use the RAG tool.")
+        raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set in the .env file.")
     
-    # Add check_compatibility=False to avoid client/server version warnings
-    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, check_compatibility=False)
-
-    # Instead of a single global name, append the session:
+    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
     collection_name = f"{QDRANT_COLLECTION_PREFIX}_{session_id}"
 
     try:
-        # Check if collection exists
         client.get_collection(collection_name=collection_name)
         st.info(f"Using existing Qdrant collection: `{collection_name}`")
     except Exception:
-        # If not, create it
         st.info(f"Creating new Qdrant collection: `{collection_name}`")
         client.recreate_collection(
             collection_name=collection_name,
@@ -161,89 +144,65 @@ def get_qdrant_client(session_id):
         )
     return client, collection_name
 
-
 # --- Local Marker Processing Functions ---
 
-def call_local_marker(file_bytes, filename, marker_converter):
-    """Use local Marker library to convert PDF to markdown and extract images"""
+def call_local_marker(file_bytes, marker_converter):
+    """Use a pre-configured local Marker converter to process a PDF."""
     try:
-        # Create a temporary file to work with
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
             temp_file.write(file_bytes)
             temp_file_path = temp_file.name
         
         try:
-            # Convert using local Marker
+            # The converter is already configured with page ranges, etc.
             rendered = marker_converter(temp_file_path)
-            
-            # Extract text, metadata, and images using Marker's output functions
             markdown_text, metadata, images = text_from_rendered(rendered)
             
-            # Convert images to base64 format for compatibility with existing code
             images_b64 = {}
             for img_name, img_pil in images.items():
-                # Convert PIL image to base64
                 img_buffer = io.BytesIO()
                 img_pil.save(img_buffer, format='PNG')
                 img_b64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
                 images_b64[img_name] = img_b64
             
-            return {
-                "markdown": markdown_text,
-                "images": images_b64,
-                "metadata": metadata
-            }
-            
+            return {"markdown": markdown_text, "images": images_b64, "metadata": metadata}
         finally:
-            # Clean up temporary file
             os.unlink(temp_file_path)
-            
     except Exception as e:
         raise Exception(f"Local Marker processing failed: {e}")
 
 def get_moondream_description(image_b64, md_model, limiter):
-    """Generates a description for a base64 encoded image, respecting rate limits."""
     try:
-        limiter.wait_if_needed() # Wait before making the API call
+        limiter.wait_if_needed()
         image_bytes = base64.b64decode(image_b64)
-        image = Image.open(io.BytesIO(image_bytes))
-        if image.mode != "RGB": image = image.convert("RGB")
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         
         encoded_image = md_model.encode_image(image)
         prompt = (
-            f"Describe the key technical findings in good technical detail inthis figure/visualization "
-            f"Illustrate and mention trends, "
-            f"patterns, and numerical values that can be observed. Provide a scientific/academic styled short, "
-            f"single paragraph summary that is highly insightful in context of the document."
+            "Describe the key technical findings in good technical detail in this figure/visualization. "
+            "Illustrate and mention trends, patterns, and numerical values that can be observed. Provide a scientific/academic styled short, "
+            "single paragraph summary that is highly insightful in context of the document."
         )
         response = md_model.query(encoded_image, prompt)
         
-        description = ""
         if isinstance(response, dict):
-            description = response.get("answer", response.get("text", "Could not find text in Moondream response."))
+            return response.get("answer", response.get("text", "")).strip()
         elif isinstance(response, str):
-            description = response
-        else:
-            description = f"Unexpected response type from Moondream: {type(response)}"
-            
-        return description.strip()
+            return response.strip()
+        return f"Unexpected response type from Moondream: {type(response)}"
     except Exception as e:
         return f"Error in Moondream processing: {str(e)}"
 
 def enrich_markdown_for_rag(markdown_text, image_descriptions):
-    """Replaces image links with their AI-generated descriptions for RAG context or output."""
     def replace_func(match):
         image_path = match.group(2)
         description = image_descriptions.get(image_path, "No description generated.")
-        # Ensure the description is wrapped to clearly distinguish it
         return f"\n\n--- Image Description ---\n{description}\n--- End Image Description ---\n\n"
 
     image_pattern = re.compile(r"!\[(.*?)\]\((.*?)\)")
-    enriched_text = image_pattern.sub(replace_func, markdown_text)
-    return enriched_text
+    return image_pattern.sub(replace_func, markdown_text)
 
 def chunk_text_with_langchain(text):
-    """Splits text into context-aware chunks for embedding."""
     markdown_splitter = RecursiveCharacterTextSplitter(
         separators=["\n\n", "\n", ". ", " ", ""],
         chunk_size=2000,
@@ -258,9 +217,9 @@ def process_and_embed_document(uploaded_file, embed_model, md_model, md_limiter,
     filename = uploaded_file.name
     file_bytes = uploaded_file.getvalue()
     
-    with st.spinner(f"1/4: Converting '{filename}' using local Marker..."):
+    with st.spinner(f"1/4: Converting '{filename}' using Marker..."):
         try:
-            marker_result = call_local_marker(file_bytes, filename, marker_converter)
+            marker_result = call_local_marker(file_bytes, marker_converter)
             raw_md = marker_result.get("markdown", "")
             images_b64 = marker_result.get("images", {})
             st.success(f"Marker processing complete for '{filename}'. Found {len(images_b64)} images.")
@@ -268,46 +227,39 @@ def process_and_embed_document(uploaded_file, embed_model, md_model, md_limiter,
             st.error(f"Failed during Marker processing for {filename}: {e}")
             return False
 
-    with st.spinner(f"2/4: Generating descriptions for {len(images_b64)} images in '{filename}'..."):
+    with st.spinner(f"2/4: Generating descriptions for {len(images_b64)} images..."):
         image_descriptions = {}
         if images_b64:
             progress_bar = st.progress(0, text=f"Describing images in {filename}...")
             for i, (img_path, img_b64) in enumerate(images_b64.items()):
-                # Pass the limiter to get_moondream_description
                 desc = get_moondream_description(img_b64, md_model, md_limiter)
                 image_descriptions[img_path] = desc
-                progress_bar.progress((i + 1) / len(images_b64), text=f"Describing image {i+1}/{len(images_b64)} in {filename}")
+                progress_bar.progress((i + 1) / len(images_b64), text=f"Describing image {i+1}/{len(images_b64)}")
             progress_bar.empty()
             st.success(f"Moondream descriptions generated for '{filename}'.")
         else:
-            st.info(f"No images found to describe in '{filename}'.")
+            st.info(f"No images to describe in '{filename}'.")
 
-    with st.spinner(f"3/4: Enriching markdown and chunking text for '{filename}'..."):
+    with st.spinner(f"3/4: Enriching and chunking text for '{filename}'..."):
         enriched_md = enrich_markdown_for_rag(raw_md, image_descriptions)
         text_chunks = chunk_text_with_langchain(enriched_md)
         if not text_chunks:
             st.warning(f"No text chunks were generated from {filename}. Skipping.")
             return False
-        st.success(f"Created {len(text_chunks)} intelligent text chunks for '{filename}'.")
+        st.success(f"Created {len(text_chunks)} text chunks for '{filename}'.")
 
-    with st.spinner(f"4/4: Embedding and upserting chunks for '{filename}'..."):
+    with st.spinner(f"4/4: Embedding and indexing chunks for '{filename}'..."):
         embeddings = embed_model.encode(text_chunks, show_progress_bar=True)
         points_to_upsert = [
             PointStruct(
                 id=str(uuid.uuid4()),
                 vector=emb.tolist(),
-                # Store the actual collection name in payload if needed, or derived session_id
                 payload={"text": chunk, "source_file": filename, "session_id": collection_name.split('_')[-1]} 
             ) for chunk, emb in zip(text_chunks, embeddings)
         ]
-        batch_size = 64
         try:
-            for i in range(0, len(points_to_upsert), batch_size):
-                batch = points_to_upsert[i:i+batch_size]
-                # Use the provided collection_name
-                qdrant_client.upsert(collection_name=collection_name, points=batch, wait=True)
-
-            st.success(f"Successfully indexed '{filename}' with {len(points_to_upsert)} enriched snippets.")
+            qdrant_client.upsert(collection_name=collection_name, points=points_to_upsert, wait=True, batch_size=64)
+            st.success(f"Successfully indexed '{filename}' with {len(points_to_upsert)} snippets.")
             return True
         except Exception as e:
             st.error(f"Failed to upsert data to Qdrant for {filename}: {e}")
@@ -316,16 +268,10 @@ def process_and_embed_document(uploaded_file, embed_model, md_model, md_limiter,
 # --- Document Extraction Pipeline Function ---
 
 def prepare_document_for_download(file_bytes, filename, md_model, md_limiter, marker_converter):
-    """
-    Processes a PDF file to extract markdown and images using local Marker, including Moondream descriptions
-    in the markdown output, and prepares images for download.
-    """
-    # 1. Call local Marker to get raw markdown and base64 encoded images
-    marker_result = call_local_marker(file_bytes, filename, marker_converter)
+    marker_result = call_local_marker(file_bytes, marker_converter)
     raw_md = marker_result.get("markdown", "")
     images_b64 = marker_result.get("images", {})
 
-    # 2. Generate Moondream descriptions for images
     image_descriptions = {}
     if images_b64:
         st.write(f"Generating descriptions for {len(images_b64)} images...")
@@ -333,49 +279,33 @@ def prepare_document_for_download(file_bytes, filename, md_model, md_limiter, ma
         for i, (img_path, img_b64) in enumerate(images_b64.items()):
             desc = get_moondream_description(img_b64, md_model, md_limiter)
             image_descriptions[img_path] = desc
-            image_progress_bar.progress((i + 1) / len(images_b64), text=f"Describing image {i+1}/{len(images_b64)} in {filename}")
+            image_progress_bar.progress((i + 1) / len(images_b64), text=f"Describing image {i+1}/{len(images_b64)}")
         image_progress_bar.empty()
         st.success(f"Moondream descriptions generated for '{filename}'.")
-    else:
-        st.info(f"No images found to describe in '{filename}'.")
 
-    # 3. Enrich markdown with image descriptions
     md_with_descriptions = enrich_markdown_for_rag(raw_md, image_descriptions)
 
-    # 4. Prepare original image files for download (renaming paths for local structure)
     images_to_save = {}
-    
     for i, (marker_path, img_b64_data) in enumerate(images_b64.items()):
         extension = os.path.splitext(marker_path)[1] or '.png'
         new_filename = f"image_{i}{extension}"
-        # Store decoded image bytes for zipping
         images_to_save[new_filename] = base64.b64decode(img_b64_data)
 
     return md_with_descriptions, images_to_save
 
-
 # --- Search and Formatting Functions ---
 
-
 def search_qdrant(query, model, qdrant_client, collection_name, k, similarity_threshold):
-
     if not query:
         return []
-    # 1. Encode query
     query_embedding = model.encode(query).tolist()
     
-    raw_results = qdrant_client.search(
-        collection_name=collection_name, # Use the session-specific collection
+    return qdrant_client.search(
+        collection_name=collection_name,
         query_vector=query_embedding,
         limit=k,
         score_threshold=similarity_threshold
     )
-    
-    # Since the collection is session-specific, all results from this collection
-    # are relevant to the current session. No further filtering by 'session_id' payload is needed.
-    return raw_results
-
-
 
 def create_passage_from_snippets(search_results):
     if not search_results:

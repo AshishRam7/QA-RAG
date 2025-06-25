@@ -61,26 +61,37 @@ if app_mode == "RAG Search":
     st.title("🧠 RAG for Question-Context Search")
     st.markdown(f"**Session ID:** `{st.session_state.session_id}` (Your uploads are isolated to this session)")
 
-    # --- Load RAG-specific Models ---
-    try:
-        embed_model = load_embedding_model()
-        moondream_model, moondream_limiter = load_moondream_model()
-        marker_converter = load_marker_model() # This now handles internal config for LLM features
-        qdrant_client, collection = None, None 
-        
-    except ValueError as e:
-        st.error(f"RAG Tool Configuration Error: {e}. Please check your .env file for all required API keys and URLs.")
-        st.stop()
-
-    # --- Sidebar Inputs for RAG ---
+    # --- Sidebar Inputs for RAG (part 1) ---
     with st.sidebar:
-        st.header("1. Upload Documents for RAG")
+        st.header("1. Document Configuration")
         uploaded_files = st.file_uploader(
             "Upload PDFs to create a searchable knowledge base.",
             type=["pdf"],
             accept_multiple_files=True,
             key="rag_uploader"
         )
+        page_range_input_rag = st.text_input(
+            "Page Range (e.g., '0,5-10,20'):",
+            help="Specify which pages to process (0-indexed). Leave empty for all pages. Changing this will require reprocessing."
+        )
+
+    # --- Load RAG-specific Models (with page range config) ---
+    try:
+        embed_model = load_embedding_model()
+        moondream_model, moondream_limiter = load_moondream_model()
+        # Pass page range to model loader. Caching handles re-initialization.
+        marker_converter = load_marker_model(page_range_input_rag) 
+        qdrant_client, collection = None, None 
+        
+    except ValueError as e:
+        st.error(f"RAG Tool Configuration Error: {e}. Please check your .env file for all required API keys and URLs.")
+        st.stop()
+    except Exception as e:
+        st.error(f"Failed to load models. Error: {e}")
+        st.stop()
+
+    # --- Sidebar Inputs for RAG (part 2) ---
+    with st.sidebar:
         st.header("2. Search Parameters")
         marks_for_question = st.number_input("Marks for the question:", min_value=1, max_value=50, value=5)
         default_k = marks_for_question * 2
@@ -105,7 +116,7 @@ if app_mode == "RAG Search":
 
             for file in files_to_process:
                 st.info(f"Processing '{file.name}'...")
-                # Pass marker_converter and moondream_limiter to process_and_embed_document
+                # The marker_converter is now pre-configured with the page range.
                 if process_and_embed_document(file, embed_model, moondream_model, moondream_limiter, marker_converter, qdrant_client, collection): 
                     st.session_state.processed_files.append(file.name)
             st.success("All new files have been processed and indexed into the knowledge base.")
@@ -121,8 +132,6 @@ if app_mode == "RAG Search":
         elif not user_query:
             st.warning("Please enter a question to search.")
         else:
-            # Ensure qdrant_client and collection are available for search
-            # They should be if st.session_state.processed_files is not empty
             if qdrant_client is None or collection is None:
                 try:
                     qdrant_client, collection = get_qdrant_client(st.session_state.session_id)
@@ -161,24 +170,33 @@ elif app_mode == "Document Extraction Pipeline":
     st.title("Document Extraction Pipeline")
     st.markdown("Upload one or more PDFs to extract content as clean Markdown files and download all their images. This uses the local Marker library for high-quality conversion.")
 
-    # Load Moondream model and limiter for this section too
-    try:
-        moondream_model, moondream_limiter = load_moondream_model()
-        marker_converter = load_marker_model()
-    except ValueError as e:
-        st.error(f"Model Configuration Error: {e}. Please check your .env file for required API keys.")
-        st.stop()
-
+    # --- Sidebar Inputs ---
     with st.sidebar:
-        st.header("1. Upload Documents")
+        st.header("1. Document Configuration")
         uploaded_files = st.file_uploader(
             "Upload your documents (PDFs only)",
             type="pdf",
             accept_multiple_files=True,
             key="extraction_uploader"
         )
+        page_range_input_extraction = st.text_input(
+            "Page Range (e.g., '0,5-10,20'):",
+            help="Specify which pages to process (0-indexed). Leave empty for all pages. Changing this will restart processing."
+        )
         st.header("2. Process")
         process_button = st.button("✨ Extract Content", type="primary", key="extraction_process_button", disabled=not uploaded_files)
+
+    # Load Moondream and Marker models (with page range config)
+    try:
+        moondream_model, moondream_limiter = load_moondream_model()
+        # Pass page range to model loader. Caching handles re-initialization.
+        marker_converter = load_marker_model(page_range_input_extraction)
+    except ValueError as e:
+        st.error(f"Model Configuration Error: {e}. Please check your .env file for required API keys.")
+        st.stop()
+    except Exception as e:
+        st.error(f"Failed to load models. Error: {e}")
+        st.stop()
 
     if process_button and uploaded_files:
         st.session_state.extraction_results = [] # Clear previous results
@@ -188,8 +206,11 @@ elif app_mode == "Document Extraction Pipeline":
                 try:
                     st.toast(f"Extracting content from '{uploaded_file.name}'...")
                     file_bytes = uploaded_file.getvalue()
-                    # Pass moondream_model, moondream_limiter, and marker_converter
-                    final_md, images_to_save = prepare_document_for_download(file_bytes, uploaded_file.name, moondream_model, moondream_limiter, marker_converter)
+                    # The marker_converter is already pre-configured with the page range.
+                    final_md, images_to_save = prepare_document_for_download(
+                        file_bytes, uploaded_file.name, moondream_model, moondream_limiter, 
+                        marker_converter
+                    )
                     basename = os.path.splitext(uploaded_file.name)[0]
                     
                     all_results.append({
