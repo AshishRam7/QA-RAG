@@ -5,7 +5,7 @@ This is a Streamlit web application for performing Retrieval-Augmented Generatio
 ### Key Features
 
 -   **Upload PDFs**: Directly upload your documents through the web interface.
--   **Advanced OCR**: Uses the Marker API for state-of-the-art, layout-aware text and table extraction.
+-   **Advanced OCR**: Uses the Marker library for state-of-the-art, layout-aware text and table extraction.
 -   **Image Understanding**: Automatically generates descriptions for images within your PDFs using the Moondream API.
 -   **Intelligent Chunking**: Uses LangChain to intelligently split documents into context-aware chunks.
 -   **Vector Search**: Ask questions in natural language to retrieve the most relevant passages from your documents, powered by Qdrant.
