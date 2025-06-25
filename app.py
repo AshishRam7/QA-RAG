@@ -6,7 +6,10 @@ import zipfile
 from datetime import datetime
 from st_copy_to_clipboard import st_copy_to_clipboard
 import torch
-torch.classes.__path__ = []
+# This line is causing issues with torch 2.x and is not typically needed.
+# If you are on an older torch version and specifically need it, keep it.
+# Otherwise, it's safer to remove or comment out as it can lead to AttributeError.
+# torch.classes.__path__ = [] 
 
 # Import the updated utility functions
 from utils import (
@@ -65,7 +68,9 @@ if app_mode == "RAG Search":
     try:
         embed_model = load_embedding_model()
         moondream_model = load_moondream_model()
-        qdrant_client = get_qdrant_client()
+        # FIX: Pass the session_id to get_qdrant_client
+        qdrant_client, collection = get_qdrant_client(st.session_state.session_id)
+        
     except ValueError as e:
         st.error(f"RAG Tool Configuration Error: {e}. Please check your .env file for all required API keys.")
         st.stop()
@@ -95,7 +100,8 @@ if app_mode == "RAG Search":
             st.toast(f"Found {len(files_to_process)} new document(s) to process.")
             for file in files_to_process:
                 st.info(f"Processing '{file.name}'...")
-                if process_and_embed_document(file, embed_model, moondream_model, qdrant_client, st.session_state.session_id):
+                # Ensure the collection name used for processing is the session-specific one
+                if process_and_embed_document(file, embed_model, moondream_model, qdrant_client, collection): # Pass the `collection` name
                     st.session_state.processed_files.append(file.name)
             st.success("All new files have been processed and indexed into the knowledge base.")
         
@@ -111,8 +117,9 @@ if app_mode == "RAG Search":
             st.warning("Please enter a question to search.")
         else:
             with st.spinner("Searching across all indexed documents..."):
+                # Ensure the collection name used for searching is the session-specific one
                 st.session_state.search_results = search_qdrant(
-                    user_query, embed_model, qdrant_client, st.session_state.session_id, k_snippets, similarity_threshold
+                    user_query, embed_model, qdrant_client, collection, k_snippets, similarity_threshold # Pass the `collection` name
                 )
 
     # --- RAG Display Results ---
@@ -139,7 +146,7 @@ if app_mode == "RAG Search":
 # =============================================================================
 elif app_mode == "Document Extraction Pipeline":
     st.title("Document Extraction Pipeline")
-    st.markdown("Upload one or more PDFs to extract content as clean Markdown files and download all their images. This uses the Marker library for high-quality conversion.")
+    st.markdown("Upload one or more PDFs to extract content as clean Markdown files and download all their images. This uses the Marker API for high-quality conversion.")
 
     with st.sidebar:
         st.header("1. Upload Documents")
