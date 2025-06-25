@@ -56,20 +56,24 @@ def load_moondream_model():
     return model
 
 @st.cache_resource
-def get_qdrant_client():
-    # Required only for RAG Search tool
+def get_qdrant_client(session_id):
     if not QDRANT_URL or not QDRANT_API_KEY:
         raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set in the .env file to use the RAG tool.")
     client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+
+    # Instead of a single global name, append the session:
+    collection_name = f"{QDRANT_COLLECTION_NAME}_{session_id}"
+
     try:
-        client.get_collection(collection_name=QDRANT_COLLECTION_NAME)
-    except Exception:
-        st.info(f"Qdrant collection '{QDRANT_COLLECTION_NAME}' not found. Creating it...")
+        client.get_collection(collection_name=collection_name)
+    except:
         client.create_collection(
-            collection_name=QDRANT_COLLECTION_NAME,
+            collection_name=collection_name,
             vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE)
         )
-    return client
+
+    return client, collection_name
+
 
 
 # --- API Call and Processing Functions ---
@@ -195,8 +199,11 @@ def process_and_embed_document(uploaded_file, embed_model, md_model, qdrant_clie
                 payload={"text": chunk, "session_id": session_id, "source_file": filename}
             ) for chunk, emb in zip(text_chunks, embeddings)
         ]
+        batch_size = 64
         try:
-            qdrant_client.upsert(collection_name=QDRANT_COLLECTION_NAME, points=points_to_upsert, wait=True)
+            for i in range(0, len(points_to_upsert), batch_size):
+                batch = points_to_upsert[i:i+batch_size]
+                qdrant_client.upsert(collection_name=QDRANT_COLLECTION_NAME, points=batch, wait=True)
             st.success(f"Successfully indexed '{filename}' with {len(points_to_upsert)} enriched snippets.")
             return True
         except Exception as e:
@@ -248,19 +255,24 @@ def prepare_document_for_download(file_bytes, filename):
 # --- Search and Formatting Functions ---
 
 def search_qdrant(query, model, qdrant_client, session_id, k, similarity_threshold):
-    if not query: return []
-    try:
-        query_embedding = model.encode(query)
-        search_results = qdrant_client.search(
-            collection_name=QDRANT_COLLECTION_NAME,
-            query_vector=query_embedding.tolist(),
-            query_filter=models.Filter(must=[models.FieldCondition(key="session_id", match=models.MatchValue(value=session_id))]),
-            limit=k, score_threshold=similarity_threshold
-        )
-        return search_results
-    except Exception as e:
-        st.error(f"An error occurred during Qdrant search: {e}")
+    if not query:
         return []
+    # 1. Encode query
+    query_embedding = model.encode(query).tolist()
+    # 2. Pull back top‑k from Qdrant without any filter
+    raw_results = qdrant_client.search(
+        collection_name=QDRANT_COLLECTION_NAME,
+        query_vector=query_embedding,
+        limit=k,
+        score_threshold=similarity_threshold
+    )
+    # 3. Keep only results for THIS session
+    filtered = [
+        res for res in raw_results
+        if res.payload.get("session_id") == session_id
+    ]
+    return filtered
+
 
 def create_passage_from_snippets(search_results):
     if not search_results:
