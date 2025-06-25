@@ -34,7 +34,7 @@ Follow these steps to get the application running locally.
     QDRANT_URL = "QDRANT_CLOUD_INSTANCE_URL"
     QDRANT_API_KEY = "QDRANT_CLOUD_INSTANCE_API_KEY"
     #Datalab is the platform to get the api keys to use Marker-OCR.
-    DATALAB_API_KEY = "DATALAB_API_KEY"
+    GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
     DATALAB_MARKER_URL = "https://www.datalab.to/api/v1/marker" #Need not modify this url, this is common for all accounts
     MOONDREAM_API_KEY = "MOONDREAM_API_KEY"
     ```
