@@ -1,6 +1,6 @@
 # Advanced RAG Search for Question Answer Dataset Creation
 
-This is a Streamlit web application for performing Retrieval-Augmented Generation (RAG) search on your PDF documents. It uses the Marker API for high-quality text extraction, Moondream for image understanding, and Qdrant for efficient vector search.
+This is a Streamlit web application for performing Retrieval-Augmented Generation (RAG) search on your PDF documents. It uses the Marker library run locally for high-quality text extraction, Moondream for image understanding, and Qdrant for efficient vector search.
 
 ### Key Features
 
