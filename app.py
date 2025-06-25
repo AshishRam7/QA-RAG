@@ -139,7 +139,7 @@ if app_mode == "RAG Search":
 # =============================================================================
 elif app_mode == "Document Extraction Pipeline":
     st.title("Document Extraction Pipeline")
-    st.markdown("Upload one or more PDFs to extract content as clean Markdown files and download all their images. This uses the Marker API for high-quality conversion.")
+    st.markdown("Upload one or more PDFs to extract content as clean Markdown files and download all their images. This uses the Marker library for high-quality conversion.")
 
     with st.sidebar:
         st.header("1. Upload Documents")
