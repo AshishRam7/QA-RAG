@@ -11,6 +11,7 @@ import torch
 from utils import (
     load_embedding_model,
     load_moondream_model,
+    load_marker_model,
     get_qdrant_client,
     process_and_embed_document,
     prepare_document_for_download,
@@ -65,6 +66,8 @@ if app_mode == "RAG Search":
         embed_model = load_embedding_model()
         # Moondream model and its limiter loaded once and cached
         moondream_model, moondream_limiter = load_moondream_model()
+        # Marker model loaded once and cached
+        marker_converter = load_marker_model()
         # Qdrant client and collection name will be loaded/created on first file upload
         qdrant_client, collection = None, None 
     except ValueError as e:
@@ -104,8 +107,8 @@ if app_mode == "RAG Search":
 
             for file in files_to_process:
                 st.info(f"Processing '{file.name}'...")
-                # Pass moondream_limiter to process_and_embed_document
-                if process_and_embed_document(file, embed_model, moondream_model, moondream_limiter, qdrant_client, collection): 
+                # Pass marker_converter and moondream_limiter to process_and_embed_document
+                if process_and_embed_document(file, embed_model, moondream_model, moondream_limiter, marker_converter, qdrant_client, collection): 
                     st.session_state.processed_files.append(file.name)
             st.success("All new files have been processed and indexed into the knowledge base.")
         
@@ -158,13 +161,14 @@ if app_mode == "RAG Search":
 # =============================================================================
 elif app_mode == "Document Extraction Pipeline":
     st.title("Document Extraction Pipeline")
-    st.markdown("Upload one or more PDFs to extract content as clean Markdown files and download all their images. This uses the Marker API for high-quality conversion.")
+    st.markdown("Upload one or more PDFs to extract content as clean Markdown files and download all their images. This uses the local Marker library for high-quality conversion.")
 
     # Load Moondream model and limiter for this section too
     try:
         moondream_model, moondream_limiter = load_moondream_model()
+        marker_converter = load_marker_model()
     except ValueError as e:
-        st.error(f"Moondream Model Configuration Error: {e}. Please check your .env file for MOONDREAM_API_KEY.")
+        st.error(f"Model Configuration Error: {e}. Please check your .env file for MOONDREAM_API_KEY.")
         st.stop()
 
     with st.sidebar:
@@ -186,8 +190,8 @@ elif app_mode == "Document Extraction Pipeline":
                 try:
                     st.toast(f"Extracting content from '{uploaded_file.name}'...")
                     file_bytes = uploaded_file.getvalue()
-                    # Pass moondream_model and moondream_limiter
-                    final_md, images_to_save = prepare_document_for_download(file_bytes, uploaded_file.name, moondream_model, moondream_limiter)
+                    # Pass moondream_model, moondream_limiter, and marker_converter
+                    final_md, images_to_save = prepare_document_for_download(file_bytes, uploaded_file.name, moondream_model, moondream_limiter, marker_converter)
                     basename = os.path.splitext(uploaded_file.name)[0]
                     
                     all_results.append({
